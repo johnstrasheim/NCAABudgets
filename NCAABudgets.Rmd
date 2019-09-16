@@ -1,0 +1,244 @@
+---
+title: "NCAA Budgets"
+output: html_notebook
+---
+
+#import libraries needed for scraping, cleaning, and analysis
+```{r}
+library(tidyverse)
+library(rvest)
+library(ggthemes)
+```
+
+#scrape and import the data
+```{r}
+url <- read_html('https://sports.usatoday.com/ncaa/finances') %>% 
+  html_nodes(xpath = '//*[@id="content"]/div[1]/div/section/div[1]/table') %>% 
+  html_table()
+all <- url[[1]]
+head(all)
+```
+
+#basic cleaning.  end with 'clean' df
+```{r}
+subrev <- all %>% mutate(TotalRev = gsub("\\,", "", `Total Revenue`))
+  
+subexp <- all %>% mutate(TotalExp = gsub("\\,", "", `Total Expenses`))
+new <- subrev %>% left_join(subexp) %>% 
+  select(-`Total Expenses`, -`Total Revenue`)
+subrev <- new %>% mutate(Revenue = as.numeric(gsub("\\$", "", `TotalRev`)))
+subexp <- new %>% mutate(Expenses = as.numeric(gsub("\\$", "", `TotalExp`)))
+clean <- subrev %>% left_join(subexp) %>% 
+  select(-`TotalRev`, -`TotalExp`)
+head(clean)
+```
+
+#Add profit and profit margin
+```{r}
+clean <- clean %>% mutate(Profit = `Revenue`-`Expenses`, ProfitMargin= ((`Revenue`-`Expenses`)/`Expenses`)*100)
+```
+
+#import football standings from last year
+```{r}
+fb <- read_html('https://www.sports-reference.com/cfb/years/2018-standings.html') %>% 
+  html_nodes(xpath = '//*[@id="standings"]') %>% 
+  html_table()
+football <- fb[[1]]
+head(football)
+```
+
+#fix column headings
+```{r}
+col_headings <- c('Rk','School','Conf', 'Wins', 'Losses', 'Pct')
+names(football) <- col_headings
+```
+
+#remove unwanted column headings
+```{r}
+football <- football[, -c(6:17)]
+football <- football[, -1]
+```
+
+#get rid of rows we don't want that are filled with re-naming text.  Got scraped weirdly into R.  File should be go to good now.  DF "fb" is our main df for football wins and losses.  Let's also re-name our main budget df that is "clean" right now to "budget". 
+```{r}
+fb<-football[!(football$Wins=="Overall"),]
+fb<-fb[!(fb$School=="School"),]
+budget <- clean
+```
+
+#what we want to do is join our budget and fb dataframes together, but first we need to make sure they have similar Conference layouts.  The current layout for 'fb' is to include the division of the conference as well.  Let's get rid of that, so we just have the conference.   Our 'fb' df should be good to go now.  Now onto cleaning the 'budget' df.
+```{r}
+fb <- fb %>% mutate(Conf = gsub("\\(East)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(West)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(Coastal)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(Mountain)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(North)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(South)", "", `Conf`))
+fb <- fb %>% mutate(Conf = gsub("\\(Atlantic)", "", `Conf`))
+fb <- fb %>% mutate(School= gsub("\\Ole Miss", "Mississippi", `School`))
+fb <- fb %>% mutate(School= gsub("\\Middle Tennessee State", "Middle Tennessee", `School`))
+fb <- fb %>% mutate(School= gsub("\\Bowling Green State", "owling Green", `School`))
+fb <- fb %>% mutate(School= gsub("\\Nevada-Las Vegas", "UNLV", `School`))
+```
+
+#some team names and conference names are not the same here, so we're changing the 'budget' df to make sure that it has similar conference names and team names as the 'fb' df.
+```{r}
+budget <- budget %>% mutate(Conf= gsub("\\Mt. West", "MWC", `Conf`))
+budget <- budget %>% mutate(Conf= gsub("\\C-USA", "CUSA", `Conf`))
+budget <- budget %>% mutate(Conf= gsub("\\AAC", "American", `Conf`))
+budget <- budget %>% mutate(School= gsub("\\Central Florida", "UCF", `School`))
+budget <- budget %>% mutate(School= gsub("\\Alabama at Birmingham", "UAB", `School`))
+budget <- budget %>% mutate(School= gsub("\\Texas-San Antonio", "UTSA", `School`))
+budget <- budget %>% mutate(School= gsub("\\Texas-El Paso", "UTEP", `School`))
+budget <- budget %>% mutate(School= gsub("\\Nevada-Las Vegas", "UNLV", `School`))
+budget <- budget %>% mutate(School= gsub("\\Louisiana-Lafayette", "Louisiana", `School`))
+budget <- budget %>% mutate(School= gsub("\\Miami \\(Ohio)", "	Miami (OH)", `School`))
+```
+
+#exclude mass and new mexico state since they're independent and all others are private.  Let's also do some final cleaning.  We'll have a little below our original 130 teams due to private schools not having their finances publicly available.
+```{r}
+df <- left_join(fb, budget, by='School', 'Conf')
+df<-df[!(df$School=="Massachusetts"),]
+df<-df[!(df$School=="New Mexico State"),]
+df <- na.omit(df) 
+df <- transform(df, Wins= as.numeric(Wins))
+df <- transform(df, Losses= as.numeric(Losses))
+df <- df[, -c(5:8)]
+colnames(df)[2] <- "Conf"
+head(df)
+
+```
+#we now have our final dataframe named 'df'.  We can now begin our analysis.
+
+
+#let's build some plots.  First, let's show a facet wrap of Wins and Expenses, separated by Conference.
+```{r}
+
+w <- ggplot(data=df, aes(x=Expenses, y=Wins)) +
+  geom_point(alpha=0.85) +
+  facet_wrap(~ Conf) +
+    geom_smooth(se=FALSE, method="lm") +
+  labs(title= "Wins/Expenses by Conference", subtitle= "The Bigger the Conference, the Higher the Budget", caption="Source:  USA Today | by John Strasheim") + theme_wsj() +
+  theme(plot.title= element_text(size=17, face="bold"), 
+        axis.title= element_text(size=11),
+        axis.text = element_blank(),
+        plot.subtitle = element_text(size=14, face="italic"),
+        plot.caption = element_text(size=12), 
+        axis.ticks=element_blank())
+w
+#ggsave("conference.png")
+```
+
+#let's see now the overall relationship between expenses and fb wins in the 2018 season.
+```{r}
+q <- ggplot(data= df, aes(x=Expenses, y=Wins)) +
+  
+  geom_point(aes(color=Conf)) + 
+  
+  geom_smooth(se=FALSE, method='lm') +
+  
+  scale_x_continuous(labels= scales::dollar) +
+  labs(title="Spending more Money Leads to More Wins?", subtitle= "In the 2018-19 FBS season, if you spend more, you're going to win more.", caption="Source: USA Today, Sports-Reference | by John Strasheim")  + theme_fivethirtyeight() +
+  theme(plot.title= element_text(size=17.5, face="bold"), 
+        axis.title= element_text(size=10),
+        axis.text = element_text(size=9),
+        plot.subtitle = element_text(size=12, face="italic"),
+        plot.caption = element_text(size=10.5)
+  )
+q
+#ggsave("budgets.png")
+```
+
+
+# nearly the same relationship when we look at revenues instead of expenses.
+```{r}
+r <- ggplot(data= df, aes(x=Revenue, y=Wins)) +
+  
+  geom_point(aes(color=Conf)) + 
+  
+  geom_smooth(se=FALSE, method='lm') +
+  
+  scale_x_continuous(labels= scales::dollar) +
+  labs(title="Making more Money Leads to More Wins?", subtitle= "In the 2018-19 FBS season, if you make more money, you'll win more.", caption="Source: USA Today, Sports-Reference | by John Strasheim")  + theme_fivethirtyeight() +
+  theme(plot.title= element_text(size=17.5, face="bold"), 
+        axis.title= element_text(size=10),
+        axis.text = element_text(size=9),
+        plot.subtitle = element_text(size=12, face="italic"),
+        plot.caption = element_text(size=10.5)
+  )
+r
+
+#ggsave("revenue.png")
+```
+
+#We can see a new type of relationship if we instead look at profits, it's interesting to note that not many teams are pulling a high profit, if any.
+```{r}
+p <- ggplot(data= df, aes(x=Profit, y=Wins)) +
+  
+  geom_point(aes(color=Conf)) + 
+  
+  geom_smooth(se=FALSE, method='lm') +
+  
+  scale_x_continuous(labels= scales::dollar) +
+  labs(title="Higher Profit Leads to More Wins?", subtitle= "In the 2018-19 FBS season, the higher the profit, the higher the wins.", caption="Source: USA Today, Sports-Reference | by John Strasheim")  + theme_fivethirtyeight() +
+  theme(plot.title= element_text(size=17.5, face="bold"), 
+        axis.title= element_text(size=10),
+        axis.text = element_text(size=9),
+        plot.subtitle = element_text(size=12, face="italic"),
+        plot.caption = element_text(size=10.5)
+  )
+p
+
+#ggsave("profit.png")
+```
+
+
+#let's pull in an outside dataframe that separates Nebraska's expenses and revenues since 2005.  
+```{r}
+nebraska <- read_csv('nebraska.csv')
+```
+
+#Now we need to transform our data to long data so that we can analyze our changes.  Let's also separte the revenues and expenses and let's split them up by type.
+```{r}
+expenses <- gather(nebraska, ExpenseType, Expense, 8:11)
+expenses <- expenses[, -c(3:8)]
+expenses <- expenses[, -1]
+revenues <- gather(nebraska, RevenueType, Revenue, 3:6)
+revenues <- revenues[, -c(3:8)]
+revenues <- revenues[, -1]
+```
+
+#Let's look at Nebraska's expenses since 2005.
+```{r}
+n <- ggplot(data=expenses, aes(x=Year, y=Expense)) +
+  geom_point(aes(color=ExpenseType)) +
+  geom_smooth(se=FALSE, method='auto') +
+    scale_y_continuous(labels = scales::dollar) +
+  labs(title="Nebraska's Expenses since 2005", subtitle="As expected, Nebraska has increased their expenses quite a bit since 2005", caption= "Source: USA Today | by John Strasheim") + theme_economist() +
+   theme(plot.title= element_text(size=17, face="bold"), 
+        axis.title= element_text(size=10),
+        axis.text = element_text(size=9),
+        plot.subtitle = element_text(size=10, face="italic"),
+        plot.caption = element_text(size=10.5),
+        legend.text = element_text(size=8)
+  )
+n
+#ggsave("NEexpenses.png")
+```
+#Now let's do the same thing, but with NE's revenues.
+```{r}
+r <- ggplot(data=revenues, aes(x=Year, y=Revenue)) +
+  geom_point(aes(color=RevenueType)) +
+  geom_smooth(se=FALSE, method='auto') +
+    scale_y_continuous(labels = scales::dollar) +
+  labs(title="Nebraska's Revenues since 2005", subtitle="As expected, Nebraska has increased their revenues quite a bit since 2005", caption= "Source: USA Today | by John Strasheim") + theme_economist() +
+   theme(plot.title= element_text(size=17, face="bold"), 
+        axis.title= element_text(size=10),
+        axis.text = element_text(size=9),
+        plot.subtitle = element_text(size=10, face="italic"),
+        plot.caption = element_text(size=10.5),
+        legend.text = element_text(size=8)
+  )
+r
+#ggsave("NErevenues.png")
+```
